@@ -1,0 +1,264 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:validation="http://www.mulesoft.org/schema/mule/validation" xmlns:os="http://www.mulesoft.org/schema/mule/os" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/validation http://www.mulesoft.org/schema/mule/validation/current/mule-validation.xsd">
+	<flow name="salesorder-sfdc-to-netsuiteFlow" doc:id="54ce9ea3-445b-497e-9ce2-900b4c4d4131" >
+		
+				<logger level="INFO" doc:name="Logger" doc:id="9d59fd36-1565-44ae-8912-fa634d272c8e" message="transformed payload = #[payload]"/>
+		<ee:transform doc:name="Transform Message" doc:id="fe1489e6-b259-462b-83a1-93b57c01dd29" >
+			<ee:message >
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="isDataValid" ><![CDATA[%dw 2.0
+output application/java
+---
+(payload[0].salesRepId != null) and 
+(payload[0].poNumber != null) and
+(payload[0].productList != null) and 
+(sizeOf(payload[0].productList) > 0) and
+(sizeOf(payload[0].productList.*internalId) == sizeOf(payload[0].productList))]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<ee:transform doc:name="Transform Message" doc:id="431d7248-6913-4d70-bc2e-da25f5ab6975">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="sfdcId"><![CDATA[%dw 2.0
+output application/java
+---
+payload[0].id]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<validation:is-true doc:name="Is data valid?" doc:id="03723f06-4a77-453d-9e57-fbcc31ae248a" expression="#[vars.isDataValid]" message="Data validation failed in sample sync flow."/>
+				<flow-ref doc:name="createSalesOrderFlow" doc:id="78c1b6b2-c4af-4aec-8136-993554db0088" name="createSalesOrderFlow" target="createSalesOrderResponse" targetValue="#[payload]"/>
+		<logger level="INFO" doc:name="Logger" doc:id="0e428754-12d9-4895-b4e0-94e071d1eac7" message="createSalesOrder response= #[vars.createSalesOrderResponse]"/>
+		<validation:is-true doc:name="Is SalesOrder Created Successfully in NetSuite?" doc:id="e34895c9-fd71-4a16-8712-309542cfdf05" expression="#[vars.createSalesOrderResponse.isSuccess]" message="#[vars.createSalesOrderResponse.errorMessage]"/>
+		<ee:transform doc:name="Transform Message" doc:id="ea8b70a7-776c-4ddc-bc49-1acd33e4293b" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+[{
+	"id": vars.sfdcId,
+	"syncStatus" : "Processed",
+	"externalId" : vars.createSalesOrderResponse.internalId,
+	"salesOrderNumber": vars.createSalesOrderResponse.salesOrderNumber
+}]
+]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<flow-ref doc:name="updateSalesOrderInSfdcFlow" doc:id="95840add-8a8a-4600-88ff-fa2beefdb0e6" name="updateSalesOrderInSfdcFlow"/>
+		<logger level="INFO" doc:name="Logger" doc:id="8d2e1a99-3b9a-4888-80c9-f5a136058d91" message="after updating salesorder in Salesforce =#[payload]"/>
+		<error-handler>
+					<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="d152e061-11e1-4539-b2f4-e59ece4d18fc" type="ANY">
+								<set-variable value="#[error.description]" doc:name="Set errorDescription" doc:id="bbd8d663-58aa-47e8-b13c-c7e5e77b9a5b" variableName="errorDescription"/>
+				<ee:transform doc:name="Transform Message" doc:id="f76d2581-f3d7-47da-b1ca-d8f51a276fd7" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+[{
+	"id": vars.sfdcId,
+	"syncStatus" : "Error"
+}]
+]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<flow-ref doc:name="updateSalesOrderInSfdcFlow" doc:id="9cc94a4c-8e41-4e27-b668-f806ae5021fe" name="updateSalesOrderInSfdcFlow"/>
+				<choice doc:name="Choice" doc:id="0e085982-a049-45b4-ab25-b32939a78edb" >
+					<when expression="#[vars.retrySalesTransactionStatus != null]">
+						<ee:transform doc:name="Transform Message" doc:id="82958402-e82e-4464-ac4f-af89eb0777d8" >
+							<ee:message >
+							</ee:message>
+							<ee:variables >
+								<ee:set-variable variableName="retrySalesTransactionStatus" ><![CDATA[%dw 2.0
+output application/json
+---
+{
+total: vars.retrySalesTransactionStatus.total,
+success: vars.retrySalesTransactionStatus.success,
+fail: vars.retrySalesTransactionStatus.fail as Array ++ [{ sfdcId: vars.sfdcId,
+	errorMessage: vars.errorDescription
+}]
+
+}]]></ee:set-variable>
+							</ee:variables>
+						</ee:transform>
+					</when>
+					<otherwise >
+						<ee:transform doc:name="Transform Message" doc:id="e0176f06-415f-4a77-8f6e-2ee2c73e1aff">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"emailBody": p('secure::samples.body') ++ vars.sfdcId ++ ":" ++ vars.errorDescription,
+	"subject": upper(p('mule.env')) ++ ": " ++ p('secure::samples.subject'),
+	"toEmails": p('secure::samples.to.emailList')
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+						<flow-ref doc:name="send-email-notificationFlow" doc:id="8fbfdd5f-da9e-428b-9c3e-3adb2dca58c0" name="send-email-notificationFlow" />
+					</otherwise>
+				</choice>
+		
+				
+</on-error-continue>
+</error-handler>
+	</flow>
+	<flow name="saleorder-track-netsuite-to-sfdcFlow" doc:id="e7c4417a-6bde-4d5b-898f-94a9d56094f4" >
+		<scheduler doc:name="Scheduler" doc:id="e699a831-2e99-4b80-a70b-f3649e9a3276" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="5" timeUnit="MINUTES"/>
+			
+</scheduling-strategy>
+		</scheduler>
+		<set-variable value="#[(((now() &gt;&gt; p('timeZone')) as String) splitBy('.'))[0]]" doc:name="Set newLastModifiedDate" doc:id="62c14a3a-47d3-48ba-855a-7d6ae8d4f105" variableName="newLastModifiedDate" />
+		<os:retrieve key="watermark_SO" objectStore="watermarkStore_SO"
+			target="lastModDate" doc:name="Retrieve lastModDate">
+			<os:default-value><![CDATA[#[read(p('watermark_so.defaultModifiedDate.expression'))]]]></os:default-value>
+		</os:retrieve>
+		<flow-ref name="getSalesOrderFlow" doc:name="getSalesOrderFlow" />
+		<!-- <set-variable value="#[(((now() as String) splitBy('+'))[0])]" doc:name="Set newLastModifiedDate" doc:id="e80c45cf-e6f1-4aa6-8912-fc64621c7c9d" variableName="newLastModifiedDate" /> -->
+		<ee:transform doc:name="Set salesOrderTransactionStats" doc:id="870a9e8a-71f0-4df7-aa81-4fe2e038b3d5" doc:description="Set salesOrderTransactionStats">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="salesOrderTransactionStats"><![CDATA[%dw 2.0
+output application/json
+---
+{
+	total: payload.*internalId,
+	success: [],
+	fail: []
+}]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<choice doc:name="Choice" doc:id="c3d3e2bc-015a-4bbb-858d-f5d43f48b444" >
+			<when expression="#[sizeOf(payload) == 0]">
+				<logger level="INFO" doc:name="Logger" doc:id="79b9010b-3176-42b4-986c-ff0a6109185f" message="eligible trackingIds to be updated = 0"/>
+
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="6f1bc3ae-4441-4e39-9a9a-b45af59f137a" message="eligible trackingIds to be updated = #[payload.*internalId]"/>
+				<foreach doc:name="For Each" doc:id="b9f854e4-4fd9-41bc-a531-179cbe0a1dff" >
+					<flow-ref doc:name="foreachUpdateSfdcSamplesFlow" name="foreachUpdateSfdcSamplesFlow" />
+				</foreach>
+			<logger level="INFO" doc:name="Logger" doc:id="e73fcf9c-df68-4c42-b13d-6738317d20c9" message="tracking Status after update = #[vars.salesOrderTransactionStats]" />
+</otherwise>
+		</choice>
+		<choice doc:name="Choice" doc:id="dda908c5-390d-4fca-8214-0b6e64c99e6f" >
+			<when expression="#[sizeOf(vars.salesOrderTransactionStats.fail) &gt; 0]">
+				<ee:transform doc:name="Transform Message" doc:id="1a818701-c0db-48a8-910e-e808298c88da">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"emailBody": p('secure::tracking.body') ++ write(vars.salesOrderTransactionStats.fail,'application/json'),
+	"subject": upper(p('mule.env')) ++ ": " ++ p('secure::tracking.subject'),
+	"toEmails": p('secure::tracking.to.emailList')
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<flow-ref doc:name="send-email-notificationFlow" doc:id="ca451988-a57a-4201-b1ab-293c068d751c" name="send-email-notificationFlow"/>
+			</when>
+			<otherwise >
+				<os:store key="watermark_SO" failOnNullValue="false" objectStore="watermarkStore_SO" doc:name="Store lastModDate">
+			<os:value><![CDATA[#[vars.newLastModifiedDate]]]></os:value>
+		</os:store>
+				<logger level="INFO" doc:name="TrackingIdsNetSuite to SFDC Migration process has been finished" doc:id="4ba359f1-7c49-4947-8aca-8273f339beec" message="TrackingIds NetSuite to SFDC Migration process has been finished" />
+			
+</otherwise>
+		</choice>
+		<error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="495c5b91-753f-4181-9c83-fadbdb059215" type="ANY">
+			<ee:transform doc:name="Transform Message" doc:id="f6ff92e6-4ac5-485c-b3f0-24f6bd133f1f">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+	"emailBody": p('secure::tracking.body') ++ ": " ++ error.description,
+	"subject": upper(p('mule.env')) ++ ": " ++ p('secure::tracking.subject'),
+	"toEmails": p('secure::tracking.to.emailList')
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<flow-ref doc:name="send-email-notificationFlow" doc:id="990e46cf-e9a7-4e69-938c-93c2d52451e5" name="send-email-notificationFlow"/>
+	
+			</on-error-continue>
+		
+		</error-handler>
+	
+</flow>
+	<flow name="foreachUpdateSfdcSamplesFlow">
+			<set-variable value="#[payload.internalId]" doc:name="Set internalId" doc:id="048e92d9-799f-4e21-bf20-d31f051f40c9" variableName="internalId"/>
+		<flow-ref doc:name="getSalesOrderInSfdcByNSIdFlow" doc:id="01234880-7b9b-49d8-a636-c59033a13df6" name="getSalesOrderInSfdcByNSIdFlow" target="getSalesOrderResponse" targetValue="#[payload]"/>
+					<choice doc:name="Choice" doc:id="ac4ff1f6-6370-4d44-835d-a02aac3343fd" >
+			<when expression="#[sizeOf(vars.getSalesOrderResponse) == 0]">
+				<logger level="INFO" doc:name="Logger" doc:id="fd37ada5-575a-446b-a11b-88fa1e61fb77" message="Sample is not present in Salesforce."/>
+			</when>
+			<otherwise >
+				<ee:transform doc:name="Transform Message" doc:id="c3db0e9f-c059-4c99-b36c-bd078c6b75c2">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+[{
+	"id": vars.getSalesOrderResponse[0].Id,
+	"trackNo" : payload.trackNo
+}]
+]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<flow-ref doc:name="updateSalesOrderInSfdcFlow" doc:id="aa613011-7921-4504-95a0-4b8cdde84d45" name="updateSalesOrderInSfdcFlow" />
+							</otherwise>
+		</choice>
+		<ee:transform doc:name="Set success data in salesOrderTransactionStats" doc:id="af404d62-3eea-4e85-82b5-c0addcdbdbc5" doc:description="Set success data in salesOrderTransactionStats">
+									<ee:message>
+									</ee:message>
+									<ee:variables>
+										<ee:set-variable variableName="salesOrderTransactionStats"><![CDATA[%dw 2.0
+output application/json
+---
+{
+total: vars.salesOrderTransactionStats.total,
+success: vars.salesOrderTransactionStats.success as Array ++ [ vars.internalId ],
+fail: vars.salesOrderTransactionStats.fail
+
+}]]></ee:set-variable>
+									</ee:variables>
+								</ee:transform>
+		
+		<error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="24c3638f-9093-4d25-8c91-bbc77ccf257a" >
+				<logger level="ERROR" doc:name="Logger" doc:id="2b0198fd-007a-42af-8756-1ca09c60e1b4" message="Error while updating tracking id in Salesforce"/>
+								<set-variable value="#[error.description]" doc:name="Set errorDescription" doc:id="d1e19e92-54ed-4aee-916f-9f0a58ee2b5d" variableName="errorDescription"/>
+	<ee:transform doc:name="Set failed data in salesOrderTransactionStats" doc:id="26726f8c-e0d8-4976-a453-ea1a130af67b" doc:description="Set failed data in salesOrderTransactionStats">
+									<ee:message>
+									</ee:message>
+									<ee:variables>
+										<ee:set-variable variableName="salesOrderTransactionStats"><![CDATA[%dw 2.0
+output application/json
+---
+{
+total: vars.salesOrderTransactionStats.total,
+success: vars.salesOrderTransactionStats.success,
+fail: vars.salesOrderTransactionStats.fail as Array ++ [{ id: vars.internalId,
+	errorMessage: vars.errorDescription
+}]
+
+}]]></ee:set-variable>
+									</ee:variables>
+								</ee:transform>
+
+			</on-error-continue>
+		</error-handler>
+	
+</flow>
+</mule>
